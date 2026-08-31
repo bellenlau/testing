@@ -1,0 +1,12 @@
+Quantum ESPRESSO 7.6 on Leonardo Booster: minimal workflow
+
+Run from a Booster compute allocation:
+
+cd /leonardo_scratch/large/userinternal/lbellen1/vscode/testing/qe-suite
+./launch.sh --version 7.6 --stack-file stacks/booster.env
+
+The stack profile loads CMake, Intel oneAPI MKL and the supplied
+NVHPC/HPC-X CUDA 12.9 module. It reuses a matching QE 7.6 installation when
+pw.x is available; otherwise it clones qe-7.6 and builds it with CMake under
+testing/work. CMake generates Unix Makefiles and the compilation is run with
+make -j 8.

@@ -1,0 +1,17 @@
+Quantum ESPRESSO 7.6 on Leonardo DCGP: minimal workflow
+
+Run from a DCGP compute allocation:
+
+cd /leonardo_scratch/large/userinternal/lbellen1/vscode/testing/qe-suite
+./launch.sh --version 7.6 --stack-file stacks/dcgp.env
+
+The stack profile loads the CPU compiler, MPI and MKL modules declared in
+stacks/dcgp.env. It reuses a matching QE 7.6 installation when pw.x is
+available; otherwise it clones qe-7.6 and builds it with CMake-generated
+Makefiles under testing/work.
+
+To prepare and submit the complete QE test suite:
+
+./launch.sh --version 7.6 --stack-file stacks/dcgp.env --submit
+
+Add --wait to wait for the Slurm job and print the result of each category.
