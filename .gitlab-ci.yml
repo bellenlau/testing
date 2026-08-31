@@ -1,0 +1,74 @@
+workflow:
+  rules:
+    - if: '$CI_COMMIT_TAG'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+    - if: '$CI_PIPELINE_SOURCE == "api"'
+    - when: never
+
+stages:
+  - validate
+  - regression
+
+variables:
+  QE_VERSION: "7.6"
+  STACKS: "all"
+  FORCE_REBUILD: "false"
+  QE_WAIT_TIMEOUT: "43200"
+
+default:
+  tags:
+    - leonardo-login
+
+validate-scripts:
+  stage: validate
+  script:
+    - |
+      for script in qe-suite/launch.sh qe-suite/submit.sh qe-suite/lib/collect-results.sh qe-suite/tests/test-collect-results.sh; do
+        bash -n "${script}"
+      done
+    - bash qe-suite/tests/test-collect-results.sh
+
+.qe-regression:
+  stage: regression
+  timeout: 12h
+  script:
+    - |
+      qe_version="${QE_VERSION}"
+      if [[ -n "${CI_COMMIT_TAG:-}" && "${CI_COMMIT_TAG}" =~ ^qe-v?([0-9]+(\.[0-9]+)+)$ ]]; then
+        qe_version="${BASH_REMATCH[1]}"
+      fi
+      run_id="ci-${CI_PIPELINE_ID}-${CI_JOB_ID}-${STACK_KEY}"
+      args=(--version "${qe_version}" --stack-file "${STACK_FILE}" --run-id "${run_id}" --wait --wait-timeout "${QE_WAIT_TIMEOUT}")
+      if [[ "${FORCE_REBUILD}" == "true" ]]; then
+        args+=(--force-rebuild)
+      fi
+      WORKSPACE_ROOT="${CI_PROJECT_DIR}" bash qe-suite/launch.sh "${args[@]}"
+  artifacts:
+    when: always
+    expire_in: 14 days
+    reports:
+      junit: "work/runs/ci-${CI_PIPELINE_ID}-${CI_JOB_ID}-${STACK_KEY}/junit.xml"
+    paths:
+      - "work/runs/ci-${CI_PIPELINE_ID}-${CI_JOB_ID}-${STACK_KEY}/"
+
+qe-dcgp:
+  extends: .qe-regression
+  variables:
+    STACK_FILE: stacks/dcgp.env
+    STACK_KEY: dcgp
+  resource_group: "qe-dcgp-${QE_VERSION}"
+  rules:
+    - if: '$CI_COMMIT_TAG'
+    - if: '$CI_PIPELINE_SOURCE == "web" && ($STACKS == "all" || $STACKS == "dcgp")'
+    - if: '$CI_PIPELINE_SOURCE == "api" && ($STACKS == "all" || $STACKS == "dcgp")'
+
+qe-booster:
+  extends: .qe-regression
+  variables:
+    STACK_FILE: stacks/booster.env
+    STACK_KEY: booster
+  resource_group: "qe-booster-${QE_VERSION}"
+  rules:
+    - if: '$CI_COMMIT_TAG'
+    - if: '$CI_PIPELINE_SOURCE == "web" && ($STACKS == "all" || $STACKS == "booster")'
+    - if: '$CI_PIPELINE_SOURCE == "api" && ($STACKS == "all" || $STACKS == "booster")'

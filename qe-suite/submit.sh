@@ -23,14 +23,21 @@ sed -i "s|^export ESPRESSO_BUILD=.*|export ESPRESSO_BUILD=${ESPRESSO_BUILD}|" EN
 
 codes=(pw cp ph pp hp tddfpt kcw all_currents epw zg xsd-pw)
 failures=0
+status_file="${RUN_DIR}/categories.status"
+status_tmp="${status_file}.tmp"
+: > "${status_tmp}"
+mv "${status_tmp}" "${status_file}"
 for code in "${codes[@]}"; do
 	log="${RUN_DIR}/test_out_${code}.log"
+	started_at=$(date +%s)
 	if make "run-tests-${code}" NPROCS="${SLURM_TASKS_PER_NODE}" >"${log}" 2>&1; then
-		printf '%s PASS\n' "${code}" | tee -a "${RUN_DIR}/categories.status"
+		result=PASS
 	else
-		printf '%s FAIL\n' "${code}" | tee -a "${RUN_DIR}/categories.status"
+		result=FAIL
 		failures=1
 	fi
+	duration_seconds=$(( $(date +%s) - started_at ))
+	printf '%s %s %s\n' "${code}" "${result}" "${duration_seconds}" | tee -a "${status_file}"
 done
 
 exit "${failures}"

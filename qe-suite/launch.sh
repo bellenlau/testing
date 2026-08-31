@@ -2,13 +2,15 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-WORKSPACE_ROOT=/leonardo_scratch/large/userinternal/lbellen1/vscode/testing
+WORKSPACE_ROOT=${WORKSPACE_ROOT:-$(cd "${SCRIPT_DIR}/.." && pwd)}
 WORK_ROOT="${WORKSPACE_ROOT}/work"
 STACK_FILE=
 VERSION=
 SUBMIT=false
 WAIT=false
 FORCE_REBUILD=false
+RUN_ID=
+WAIT_TIMEOUT=43200
 
 usage() {
     cat <<'EOF'
@@ -19,7 +21,9 @@ Build or reuse Quantum ESPRESSO and prepare its full regression suite.
   --stack-file PROFILE    Trusted shell profile under stacks/
     --force-rebuild         Rebuild QE even when a local build is available
   --submit                Submit the prepared suite with sbatch
-    --wait                  Submit and wait for the Slurm job
+    --wait                  Submit and collect the Slurm job result
+    --run-id ID             Use an explicit run identifier
+    --wait-timeout SECONDS  Maximum wait time for Slurm accounting (default: 43200)
 EOF
 }
 
@@ -32,14 +36,19 @@ while [[ $# -gt 0 ]]; do
         --force-rebuild) FORCE_REBUILD=true; shift ;;
         --submit) SUBMIT=true; shift ;;
         --wait) WAIT=true; SUBMIT=true; shift ;;
+        --run-id) RUN_ID=${2:?}; shift 2 ;;
+        --wait-timeout) WAIT_TIMEOUT=${2:?}; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown argument: $1" ;;
     esac
 done
 
 [[ -n "${VERSION}" && -n "${STACK_FILE}" ]] || { usage >&2; exit 2; }
+[[ "${WORKSPACE_ROOT}" != "${HOME}" && "${WORKSPACE_ROOT}" != "${HOME}"/* ]] || die 'workspace root must not be below HOME'
 [[ "${WORK_ROOT}" == "${WORKSPACE_ROOT}"/* ]] || die "work root must be below ${WORKSPACE_ROOT}"
 [[ -f "${STACK_FILE}" ]] || die "stack profile not found: ${STACK_FILE}"
+[[ -z "${RUN_ID}" || "${RUN_ID}" =~ ^[A-Za-z0-9._-]+$ ]] || die 'run ID may contain only letters, digits, dot, underscore, and dash'
+[[ "${WAIT_TIMEOUT}" =~ ^[1-9][0-9]*$ ]] || die 'wait timeout must be a positive integer'
 STACK_FILE=$(cd "$(dirname "${STACK_FILE}")" && pwd)/$(basename "${STACK_FILE}")
 command -v git >/dev/null || die 'git is required'
 command -v module >/dev/null || die 'environment modules are required'
@@ -80,8 +89,9 @@ fi
 [[ -x "${QE_BUILD}/bin/pw.x" ]] || die "pw.x is unavailable at ${QE_BUILD}/bin/pw.x"
 [[ -d "${SOURCE_ROOT}/test-suite" ]] || die "QE source test-suite missing: ${SOURCE_ROOT}/test-suite"
 
-run_id="${STACK_NAME}-qe${VERSION}-$(date -u +%Y%m%dT%H%M%SZ)"
+run_id=${RUN_ID:-"${STACK_NAME}-qe${VERSION}-$(date -u +%Y%m%dT%H%M%SZ)"}
 RUN_DIR="${WORK_ROOT}/runs/${run_id}"
+[[ ! -e "${RUN_DIR}" ]] || die "run directory already exists: ${RUN_DIR}"
 mkdir -p "${RUN_DIR}"
 cp -a "${SOURCE_ROOT}/test-suite" "${RUN_DIR}/test-suite"
 cp -a "${SOURCE_ROOT}/pseudo" "${RUN_DIR}/pseudo"
@@ -118,6 +128,7 @@ sed -i "2i#SBATCH --partition=${SLURM_PARTITION}\n#SBATCH --nodes=${SLURM_NODES}
 [[ -n "${SLURM_GRES:-}" ]] && sed -i "2i#SBATCH --gres=${SLURM_GRES}" "${RUN_DIR}/submit.sh"
 chmod +x "${RUN_DIR}/submit.sh"
 printf 'Prepared suite: %s\n' "${RUN_DIR}"
+printf 'RUN_DIR=%s\n' "${RUN_DIR}"
 
 if [[ "${SUBMIT}" == false ]]; then
     exit 0
@@ -126,6 +137,7 @@ fi
 command -v sbatch >/dev/null || die 'sbatch is required for --submit'
 sbatch_args=(
     --parsable
+    --output="${RUN_DIR}/slurm-%j.out"
     --partition="${SLURM_PARTITION}"
     --time="${SLURM_TIME:-24:00:00}"
     --nodes="${SLURM_NODES}"
@@ -138,10 +150,12 @@ sbatch_args=(
 [[ -n "${SLURM_GRES:-}" ]] && sbatch_args+=(--gres="${SLURM_GRES}")
 job_id=$(sbatch "${sbatch_args[@]}" "${RUN_DIR}/submit.sh")
 printf 'Submitted job: %s\n' "${job_id}"
+printf 'JOB_ID=%s\n' "${job_id}"
 printf '%s\n' "${job_id}" > "${RUN_DIR}/job.id"
 
 if [[ "${WAIT}" == true ]]; then
-    command -v scontrol >/dev/null || die 'scontrol is required for --wait'
-    scontrol wait_job "${job_id}"
-    cat "${RUN_DIR}/categories.status"
+    bash "${SCRIPT_DIR}/lib/collect-results.sh" \
+        --job-id "${job_id}" \
+        --run-dir "${RUN_DIR}" \
+        --timeout "${WAIT_TIMEOUT}"
 fi
